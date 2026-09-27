@@ -406,20 +406,7 @@ async def sync(ctx):
 
 
 def run_bot():
-    """Entry point for the bot when used as a package."""
-
-    # Start the health check server in a separate thread
-    health_thread = threading.Thread(
-        target=run_health_server,
-        daemon=True
-    )
-
-    health_thread.start()
-
-    # Run the bot
-    bot.run(
-        os.getenv('DISCORD_TOKEN')
-    )
+    
 
 
 # Run the bot if this file is executed directly

@@ -382,7 +382,6 @@ async def on_ready():
         ]
     )
 
-
 # Sync commands to the current Discord server
 @bot.command()
 async def sync(ctx):
@@ -403,12 +402,3 @@ async def sync(ctx):
     await ctx.send(
         "Synced commands to this server."
     )
-
-
-def run_bot():
-    
-
-
-# Run the bot if this file is executed directly
-if __name__ == '__main__':
-    run_bot()

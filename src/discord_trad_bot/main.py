@@ -10,14 +10,12 @@ from dotenv import load_dotenv
 from googletrans import LANGUAGES
 
 from discord_trad_bot import db
-
 from discord_trad_bot.utils import (
     preserve_user_mentions,
     restore_mentions,
     translate_message,
     detect_language,
 )
-
 from discord_trad_bot.constants import SUPPORTED_LANGUAGES
 from discord_trad_bot.commands import admin_commands
 
@@ -40,12 +38,11 @@ try:
 except ValueError:
     TRANSLATION_CHANNEL_ID = 0
 
-
 TRANSLATION_CATEGORY_NAME = "Translations"
 
 
 # =========================================================
-# LANGUAGE NAMES
+# LANGUAGE HELPERS
 # =========================================================
 
 LANGUAGE_NAMES = {
@@ -53,7 +50,6 @@ LANGUAGE_NAMES = {
     for code in SUPPORTED_LANGUAGES
     if code in LANGUAGES
 }
-
 
 LANGUAGE_ALIASES = {
     "english": "en",
@@ -63,6 +59,7 @@ LANGUAGE_ALIASES = {
     "german": "de",
     "italian": "it",
     "portuguese": "pt",
+    "brazilian portuguese": "pt",
     "japanese": "ja",
     "korean": "ko",
     "russian": "ru",
@@ -122,9 +119,7 @@ intents.members = True
 # RENDER HEALTH CHECK
 # =========================================================
 
-class HealthCheckHandler(
-    BaseHTTPRequestHandler
-):
+class HealthCheckHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
 
@@ -152,7 +147,6 @@ class HealthCheckHandler(
             )
 
         else:
-
             self.send_response(404)
             self.end_headers()
 
@@ -194,7 +188,7 @@ async def get_or_create_translation_category(
         guild.categories
     )
 
-    if category:
+    if category is not None:
         return category
 
     category = await guild.create_category(
@@ -203,7 +197,8 @@ async def get_or_create_translation_category(
     )
 
     print(
-        f"Created category: {category.name}"
+        f"Created translation category: "
+        f"{category.name}"
     )
 
     return category
@@ -224,25 +219,23 @@ async def get_or_create_language_channel(
         )
     )
 
-    channel_name = (
-        f"translate-{language}"
-    )
+    channel_name = f"translate-{language}"
 
     existing = discord.utils.find(
         lambda channel:
             channel.name == channel_name
-        and channel.category_id == category.id,
+            and channel.category_id == category.id,
         guild.text_channels
     )
 
-    if existing:
+    if existing is not None:
         return existing
 
     channel = await guild.create_text_channel(
         channel_name,
         category=category,
         reason=(
-            "Create translation channel for "
+            "Create shared translation channel for "
             f"{language_display_name(language)}"
         )
     )
@@ -251,7 +244,7 @@ async def get_or_create_language_channel(
         embed=discord.Embed(
             title=(
                 f"{language_display_name(language)} "
-                f"Translations"
+                "Translations"
             ),
             description=(
                 "Messages from the main chat are "
@@ -370,11 +363,13 @@ def add_translate_context_menu(bot):
                 f"Manual translation error: {e}"
             )
 
-            await interaction.response.send_message(
-                "There was an error translating "
-                "this message.",
-                ephemeral=True
-            )
+            if not interaction.response.is_done():
+
+                await interaction.response.send_message(
+                    "There was an error translating "
+                    "this message.",
+                    ephemeral=True
+                )
 
     bot.tree.add_command(
         translate_message_context
@@ -389,15 +384,13 @@ async def automatic_translate_message(
     message: discord.Message
 ):
 
-    # Only messages from a Discord server.
     if message.guild is None:
         return
 
-    # Never translate bot messages.
     if message.author.bot:
         return
 
-    # Only monitor our designated #chat channel.
+    # Only monitor the designated #chat channel.
     if (
         TRANSLATION_CHANNEL_ID
         and message.channel.id
@@ -410,18 +403,29 @@ async def automatic_translate_message(
     if not content:
         return
 
-    # Don't translate bot commands.
+    # Ignore commands.
     if content.startswith("!"):
         return
 
-    # Get all selected languages.
-    user_languages = (
-        await db.get_all_user_langs()
-    )
+    try:
+
+        user_languages = (
+            await db.get_all_user_langs()
+        )
+
+    except Exception as e:
+
+        print(
+            f"Could not read language preferences: {e}"
+        )
+
+        return
 
     if not user_languages:
         return
 
+    # Only create translations for languages currently
+    # selected by at least one member.
     active_languages = set(
         user_languages.values()
     )
@@ -429,7 +433,6 @@ async def automatic_translate_message(
     if not active_languages:
         return
 
-    # Detect the original language once.
     try:
 
         detected_lang = await asyncio.to_thread(
@@ -454,16 +457,14 @@ async def automatic_translate_message(
         )
     )
 
-    # Translate once for each active language.
+    # One translation per language.
     for target_language in active_languages:
 
         try:
 
             if target_language == detected_lang:
 
-                translated_text = (
-                    content_preserved
-                )
+                translated_text = content_preserved
 
             else:
 
@@ -504,10 +505,9 @@ async def automatic_translate_message(
                 url=message.jump_url
             )
 
+            # Keep the sender's name on the translation.
             embed.set_author(
-                name=(
-                    f"{message.author.display_name}"
-                ),
+                name=message.author.display_name,
                 icon_url=(
                     message.author.display_avatar.url
                 )
@@ -530,8 +530,8 @@ async def automatic_translate_message(
         except discord.Forbidden:
 
             print(
-                "Discord denied permission to "
-                f"create/write #translate-{target_language}. "
+                "Discord denied permission to create "
+                f"or write #translate-{target_language}. "
                 "Make sure the bot has Manage Channels."
             )
 
@@ -547,9 +547,7 @@ async def automatic_translate_message(
 # BOT
 # =========================================================
 
-class TranslationBot(
-    commands.Bot
-):
+class TranslationBot(commands.Bot):
 
     def __init__(self):
 
@@ -573,8 +571,8 @@ class TranslationBot(
         )
         @app_commands.describe(
             language=(
-                "Example: English, Spanish, "
-                "Dutch, French, or a language code"
+                "Example: English, Spanish, Dutch, "
+                "French, or a language code"
             )
         )
         async def mylang(
@@ -582,9 +580,16 @@ class TranslationBot(
             language: str
         ):
 
+            # Acknowledge the interaction immediately.
+            # This prevents "The application did not respond"
+            # while Discord channel creation is happening.
+            await interaction.response.defer(
+                ephemeral=True
+            )
+
             if interaction.guild is None:
 
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "Use `/mylang` inside the server.",
                     ephemeral=True
                 )
@@ -593,7 +598,7 @@ class TranslationBot(
 
             value = language.strip().lower()
 
-            # Turn personal translation preference off.
+            # Turn translation preference off.
             if value in {
                 "off",
                 "disable",
@@ -604,7 +609,7 @@ class TranslationBot(
                     interaction.user.id
                 )
 
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "Your translation language has "
                     "been turned off.",
                     ephemeral=True
@@ -618,12 +623,12 @@ class TranslationBot(
 
             if not language_code:
 
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "I don't recognize that language.\n\n"
                     "Try a language such as "
                     "`english`, `spanish`, `dutch`, "
                     "`french`, `german`, `italian`, "
-                    "`japanese`, or a supported code.",
+                    "`japanese`, or a supported language code.",
                     ephemeral=True
                 )
 
@@ -631,13 +636,13 @@ class TranslationBot(
 
             try:
 
-                # Save personal preference.
+                # Save the member's preference.
                 await db.set_user_lang(
                     interaction.user.id,
                     language_code
                 )
 
-                # Create the shared language channel.
+                # Create the shared channel if needed.
                 channel = (
                     await get_or_create_language_channel(
                         interaction.guild,
@@ -645,19 +650,19 @@ class TranslationBot(
                     )
                 )
 
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"Your personal language is now "
                     f"**{language_display_name(language_code)}**.\n\n"
-                    f"Your language channel is "
+                    f"Your translations will appear in "
                     f"{channel.mention}.",
                     ephemeral=True
                 )
 
             except discord.Forbidden:
 
-                await interaction.response.send_message(
-                    "I couldn't create the language channel. "
-                    "Give TB Server Translator the "
+                await interaction.followup.send(
+                    "I couldn't create the language channel.\n\n"
+                    "Make sure TB Server Translator has "
                     "**Manage Channels** permission.",
                     ephemeral=True
                 )
@@ -668,8 +673,9 @@ class TranslationBot(
                     f"/mylang error: {e}"
                 )
 
-                await interaction.response.send_message(
-                    "I couldn't configure that language.",
+                await interaction.followup.send(
+                    "I couldn't configure that language. "
+                    "Check the Render logs for the exact error.",
                     ephemeral=True
                 )
 
@@ -721,10 +727,42 @@ class TranslationBot(
                 for code in codes
             )
 
+            # Discord message limit is 2000 characters.
+            chunks = []
+
+            while len(text) > 1900:
+
+                split_at = text.rfind(
+                    " ",
+                    0,
+                    1900
+                )
+
+                if split_at == -1:
+                    split_at = 1900
+
+                chunks.append(
+                    text[:split_at]
+                )
+
+                text = text[
+                    split_at:
+                ].strip()
+
+            if text:
+                chunks.append(text)
+
             await interaction.response.send_message(
-                text[:1900],
+                chunks[0] if chunks else "No languages found.",
                 ephemeral=True
             )
+
+            for chunk in chunks[1:]:
+
+                await interaction.followup.send(
+                    chunk,
+                    ephemeral=True
+                )
 
         print(
             "Registered /languages command"
@@ -764,17 +802,17 @@ class TranslationBot(
             embed.add_field(
                 name="How it works",
                 value=(
-                    "Messages in #chat are translated into "
-                    "each language currently selected by "
-                    "members."
+                    "Messages in the main #chat channel are "
+                    "translated into every language currently "
+                    "selected by members."
                 ),
                 inline=False
             )
 
             embed.add_field(
-                name="Channels",
+                name="Translation channels",
                 value=(
-                    "Each language has one shared channel:\n"
+                    "Each language has one shared channel.\n\n"
                     "`#translate-english`\n"
                     "`#translate-spanish`\n"
                     "`#translate-dutch`\n"
@@ -784,7 +822,7 @@ class TranslationBot(
             )
 
             embed.add_field(
-                name="Turn it off",
+                name="Turn translation off",
                 value=(
                     "`/mylang off`"
                 ),
@@ -840,7 +878,7 @@ class TranslationBot(
             return choices
 
         # -------------------------------------------------
-        # CONTEXT MENU
+        # MANUAL TRANSLATE
         # -------------------------------------------------
 
         add_translate_context_menu(
@@ -907,7 +945,7 @@ async def on_message(
     if message.author.bot:
         return
 
-    # Keep !sync working.
+    # Keep prefix commands working.
     await bot.process_commands(
         message
     )
@@ -967,12 +1005,22 @@ def run_bot():
 
     health_thread.start()
 
-    bot.run(
-        os.getenv(
-            "DISCORD_TOKEN"
-        )
+    token = os.getenv(
+        "DISCORD_TOKEN"
     )
 
+    if not token:
+
+        raise RuntimeError(
+            "DISCORD_TOKEN is not configured."
+        )
+
+    bot.run(token)
+
+
+# =========================================================
+# RUN
+# =========================================================
 
 if __name__ == "__main__":
     run_bot()

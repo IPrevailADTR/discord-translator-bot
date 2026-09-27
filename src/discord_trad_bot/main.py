@@ -1,4 +1,5 @@
 import os
+import asyncio
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -20,27 +21,57 @@ import json
 # Load environment variables
 load_dotenv()
 
+
+# ---------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------
+
+# Put the Discord channel ID here through Render environment
+# variables using:
+#
+# TRANSLATION_CHANNEL_ID = your_channel_id
+#
+# If left blank/0, automatic translation will run in all
+# server text channels.
+TRANSLATION_CHANNEL_ID = int(
+    os.getenv('TRANSLATION_CHANNEL_ID', '0') or '0'
+)
+
+
+# ---------------------------------------------------------
 # Bot setup
+# ---------------------------------------------------------
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 
+# ---------------------------------------------------------
+# Render health check
+# ---------------------------------------------------------
+
 class HealthCheckHandler(BaseHTTPRequestHandler):
+
     def do_GET(self):
         if self.path == '/health':
             self.send_response(200)
-            self.send_header('Content-type', 'application/json')
+            self.send_header(
+                'Content-type',
+                'application/json'
+            )
             self.end_headers()
 
             response = {
                 'status': 'healthy',
-                'bot_status': 'online' if bot.is_ready() else 'offline'
+                'bot_status':
+                    'online' if bot.is_ready() else 'offline'
             }
 
             self.wfile.write(
                 json.dumps(response).encode()
             )
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -48,7 +79,10 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 
 def run_health_server():
     server = HTTPServer(
-        ('0.0.0.0', int(os.getenv('PORT', '8080'))),
+        (
+            '0.0.0.0',
+            int(os.getenv('PORT', '8080'))
+        ),
         HealthCheckHandler
     )
 
@@ -60,9 +94,15 @@ def run_health_server():
     server.serve_forever()
 
 
-# Add context menu command for translation
+# ---------------------------------------------------------
+# Manual Translate context menu
+# ---------------------------------------------------------
+
 def add_translate_context_menu(bot):
-    @app_commands.context_menu(name="Translate")
+
+    @app_commands.context_menu(
+        name="Translate"
+    )
     async def translate_message_context(
         interaction: discord.Interaction,
         message: discord.Message
@@ -73,15 +113,14 @@ def add_translate_context_menu(bot):
 
         if not user_lang:
             await interaction.response.send_message(
-                "⚠️ You haven't set a language preference yet!\n"
-                "Please use `/setlang <language_code>` "
-                "(or `!setlang <language_code>`) "
-                "to set your preferred language before using Translate.",
+                "You haven't set a language preference yet. "
+                "Use `/setlang` first.",
                 ephemeral=True
             )
             return
 
-        detected_lang = detect_language(
+        detected_lang = await asyncio.to_thread(
+            detect_language,
             message.content
         )
 
@@ -94,8 +133,8 @@ def add_translate_context_menu(bot):
 
         if detected_lang == user_lang:
             await interaction.response.send_message(
-                f"This message is already in your preferred language "
-                f"({user_lang}).",
+                f"This message is already in "
+                f"your preferred language ({user_lang}).",
                 ephemeral=True
             )
             return
@@ -107,7 +146,8 @@ def add_translate_context_menu(bot):
                 )
             )
 
-            translated_text = translate_message(
+            translated_text = await asyncio.to_thread(
+                translate_message,
                 content_preserved,
                 user_lang
             )
@@ -146,12 +186,12 @@ def add_translate_context_menu(bot):
 
         except Exception as e:
             print(
-                f"Error processing translation for user "
-                f"{interaction.user.id}: {str(e)}"
+                f"Manual translation error: {e}"
             )
 
             await interaction.response.send_message(
-                "Sorry, there was an error translating this message.",
+                "Sorry, there was an error translating "
+                "this message.",
                 ephemeral=True
             )
 
@@ -160,7 +200,184 @@ def add_translate_context_menu(bot):
     )
 
 
+# ---------------------------------------------------------
+# Automatic translation
+# ---------------------------------------------------------
+
+async def automatic_translate_message(
+    message: discord.Message
+):
+
+    # Only translate messages in guild channels.
+    if message.guild is None:
+        return
+
+    # Ignore bots.
+    if message.author.bot:
+        return
+
+    # If a translation channel has been configured,
+    # only translate messages from that channel.
+    if (
+        TRANSLATION_CHANNEL_ID
+        and message.channel.id != TRANSLATION_CHANNEL_ID
+    ):
+        return
+
+    content = message.content.strip()
+
+    if not content:
+        return
+
+    # Don't translate bot-style commands.
+    if content.startswith('!'):
+        return
+
+    # Detect source language.
+    detected_lang = await asyncio.to_thread(
+        detect_language,
+        content
+    )
+
+    if not detected_lang:
+        print(
+            "Could not detect language for message."
+        )
+        return
+
+    # Get everyone who has selected a language.
+    preferences = await db.get_all_user_prefs()
+
+    # Group recipients by destination language.
+    recipients_by_language = {}
+
+    for user_id, user_lang, auto_translate in preferences:
+
+        if not auto_translate:
+            continue
+
+        try:
+            target_user_id = int(user_id)
+        except (TypeError, ValueError):
+            continue
+
+        # Don't DM the person who sent the message.
+        if target_user_id == message.author.id:
+            continue
+
+        # No translation needed when the user's language
+        # is already the language of the message.
+        if user_lang == detected_lang:
+            continue
+
+        # Only send to members of this server.
+        member = message.guild.get_member(
+            target_user_id
+        )
+
+        if member is None:
+            continue
+
+        recipients_by_language.setdefault(
+            user_lang,
+            []
+        ).append(member)
+
+    if not recipients_by_language:
+        return
+
+    # Preserve mentions while translating.
+    content_preserved, mention_map = (
+        preserve_user_mentions(
+            content
+        )
+    )
+
+    # Translate once per destination language.
+    for destination_lang, members in (
+        recipients_by_language.items()
+    ):
+
+        try:
+            translated_text = await asyncio.to_thread(
+                translate_message,
+                content_preserved,
+                destination_lang
+            )
+
+            translated_text = restore_mentions(
+                translated_text,
+                mention_map
+            )
+
+        except Exception as e:
+            print(
+                f"Translation error for "
+                f"{destination_lang}: {e}"
+            )
+            continue
+
+        # Build the DM embed.
+        embed = discord.Embed(
+            title="Automatic Translation",
+            description=translated_text,
+            color=discord.Color.blue(),
+            url=message.jump_url
+        )
+
+        embed.set_author(
+            name=(
+                f"{message.author.display_name} "
+                f"in #{message.channel.name}"
+            ),
+            icon_url=(
+                message.author.display_avatar.url
+            )
+        )
+
+        embed.set_footer(
+            text=(
+                f"Original language: {detected_lang} "
+                f"• Your language: {destination_lang}"
+            )
+        )
+
+        # Send to every opted-in member using that language.
+        for member in members:
+
+            try:
+                await member.send(
+                    embed=embed,
+                    allowed_mentions=discord.AllowedMentions.none()
+                )
+
+                print(
+                    f"Sent {destination_lang} translation "
+                    f"to {member} for message "
+                    f"{message.id}"
+                )
+
+            except discord.Forbidden:
+                print(
+                    f"Cannot DM {member}; "
+                    f"their DMs may be disabled."
+                )
+
+            except discord.HTTPException as e:
+                print(
+                    f"Discord DM error for {member}: {e}"
+                )
+
+            # Small delay to avoid hammering Discord.
+            await asyncio.sleep(0.2)
+
+
+# ---------------------------------------------------------
+# Bot class
+# ---------------------------------------------------------
+
 class TranslationBot(commands.Bot):
+
     def __init__(self):
         super().__init__(
             command_prefix='!',
@@ -169,22 +386,27 @@ class TranslationBot(commands.Bot):
         )
 
     async def setup_hook(self):
-        # Add autocomplete for language codes
+
+        # ---------------------------------------------
+        # /setlang
+        # ---------------------------------------------
+
         @self.tree.command(
             name="setlang",
             description="Set your preferred language"
         )
         @app_commands.describe(
-            language="Your preferred language"
+            language="Your preferred language code"
         )
         async def setlang(
             interaction: discord.Interaction,
             language: str
         ):
+
             if language not in SUPPORTED_LANGUAGES:
                 await interaction.response.send_message(
-                    f'`{language}` is not a supported language code. '
-                    f'Use `!languages` to see the list of supported codes.',
+                    f'`{language}` is not a supported '
+                    f'language code.',
                     ephemeral=True
                 )
                 return
@@ -195,13 +417,71 @@ class TranslationBot(commands.Bot):
             )
 
             await interaction.response.send_message(
-                f'Your preferred language has been set to `{language}`',
+                f'Your preferred language has been set '
+                f'to `{language}`.\n\n'
+                f'Automatic translations are now enabled '
+                f'for you. Use `/autotranslate false` '
+                f'to turn them off.',
                 ephemeral=True
             )
 
         print(
             "Registered /setlang command"
         )
+
+        # ---------------------------------------------
+        # /autotranslate
+        # ---------------------------------------------
+
+        @self.tree.command(
+            name="autotranslate",
+            description="Turn automatic translation DMs on or off"
+        )
+        @app_commands.describe(
+            enabled="Enable or disable automatic translations"
+        )
+        async def autotranslate(
+            interaction: discord.Interaction,
+            enabled: bool
+        ):
+
+            user_lang = await db.get_user_lang(
+                interaction.user.id
+            )
+
+            if not user_lang:
+                await interaction.response.send_message(
+                    "Set your language first with `/setlang`.",
+                    ephemeral=True
+                )
+                return
+
+            await db.set_auto_translate(
+                interaction.user.id,
+                enabled
+            )
+
+            if enabled:
+                response = (
+                    "Automatic translations are now **ON**."
+                )
+            else:
+                response = (
+                    "Automatic translations are now **OFF**."
+                )
+
+            await interaction.response.send_message(
+                response,
+                ephemeral=True
+            )
+
+        print(
+            "Registered /autotranslate command"
+        )
+
+        # ---------------------------------------------
+        # /ping
+        # ---------------------------------------------
 
         @self.tree.command(
             name="ping",
@@ -219,6 +499,10 @@ class TranslationBot(commands.Bot):
             "Registered /ping command"
         )
 
+        # ---------------------------------------------
+        # /languages
+        # ---------------------------------------------
+
         @self.tree.command(
             name="languages",
             description="List available languages"
@@ -226,27 +510,49 @@ class TranslationBot(commands.Bot):
         async def languages_slash(
             interaction: discord.Interaction
         ):
+
             codes = sorted(
                 SUPPORTED_LANGUAGES
             )
 
-            chunk_size = 50
+            # Discord allows 2000 characters per normal
+            # response, so split into manageable chunks.
+            chunks = []
 
-            for i in range(
-                0,
-                len(codes),
-                chunk_size
-            ):
-                await interaction.response.send_message(
-                    ' '.join(
-                        codes[i:i + chunk_size]
-                    ),
+            current = ""
+
+            for code in codes:
+
+                if len(current) + len(code) + 1 > 1900:
+                    chunks.append(current)
+                    current = code
+                else:
+                    if current:
+                        current += " "
+
+                    current += code
+
+            if current:
+                chunks.append(current)
+
+            await interaction.response.send_message(
+                chunks[0],
+                ephemeral=True
+            )
+
+            for chunk in chunks[1:]:
+                await interaction.followup.send(
+                    chunk,
                     ephemeral=True
                 )
 
         print(
             "Registered /languages command"
         )
+
+        # ---------------------------------------------
+        # /mylang
+        # ---------------------------------------------
 
         @self.tree.command(
             name="mylang",
@@ -255,25 +561,37 @@ class TranslationBot(commands.Bot):
         async def mylang_slash(
             interaction: discord.Interaction
         ):
+
             user_lang = await db.get_user_lang(
                 interaction.user.id
             )
 
-            if user_lang:
+            if not user_lang:
                 await interaction.response.send_message(
-                    f'Your preferred language is `{user_lang}`.',
+                    "You have not set a language yet. "
+                    "Use `/setlang`.",
                     ephemeral=True
                 )
-            else:
-                await interaction.response.send_message(
-                    'You have not set a preferred language yet. '
-                    'Use `/setlang <language_code>`.',
-                    ephemeral=True
-                )
+                return
+
+            auto_enabled = await db.get_auto_translate(
+                interaction.user.id
+            )
+
+            await interaction.response.send_message(
+                f"Your language: `{user_lang}`\n"
+                f"Automatic translations: "
+                f"`{'ON' if auto_enabled else 'OFF'}`",
+                ephemeral=True
+            )
 
         print(
             "Registered /mylang command"
         )
+
+        # ---------------------------------------------
+        # /help-translate
+        # ---------------------------------------------
 
         @self.tree.command(
             name="help-translate",
@@ -282,33 +600,40 @@ class TranslationBot(commands.Bot):
         async def help_slash(
             interaction: discord.Interaction
         ):
+
             embed = discord.Embed(
                 title="Translation Bot Help",
                 color=discord.Color.blue()
             )
 
             embed.add_field(
-                name="User Commands",
+                name="Language",
                 value=(
-                    "`/setlang <language_code>` — "
-                    "Set your preferred language\n"
-                    "`/languages` — List available languages\n"
-                    "`/mylang` — Show your current language setting\n"
-                    "`/ping` — Test if the bot is working"
+                    "`/setlang <language>` — "
+                    "Choose your language\n"
+                    "`/mylang` — View your settings\n"
+                    "`/languages` — List language codes"
                 ),
                 inline=False
             )
 
             embed.add_field(
-                name="How to Translate Messages",
+                name="Automatic Translation",
                 value=(
-                    "• Set your preferred language with "
-                    "`/setlang <language_code>`\n"
-                    "• Right-click any message, go to "
-                    "**Apps > Translate** to get a private "
-                    "translation in your language\n"
-                    "• All translation features are available "
-                    "in every channel."
+                    "`/autotranslate true` — Turn it on\n"
+                    "`/autotranslate false` — Turn it off\n\n"
+                    "Messages from the configured translation "
+                    "channel are automatically translated and "
+                    "sent to your Discord DMs."
+                ),
+                inline=False
+            )
+
+            embed.add_field(
+                name="Manual Translation",
+                value=(
+                    "You can also right-click a message and "
+                    "use **Apps → Translate**."
                 ),
                 inline=False
             )
@@ -322,11 +647,16 @@ class TranslationBot(commands.Bot):
             "Registered /help-translate command"
         )
 
+        # ---------------------------------------------
+        # Language autocomplete
+        # ---------------------------------------------
+
         @setlang.autocomplete('language')
         async def language_autocomplete(
             interaction: discord.Interaction,
             current: str
         ) -> list[app_commands.Choice[str]]:
+
             return [
                 app_commands.Choice(
                     name=lang,
@@ -338,6 +668,10 @@ class TranslationBot(commands.Bot):
                 if current.lower() in lang.lower()
             ][:25]
 
+        # ---------------------------------------------
+        # Manual context menu
+        # ---------------------------------------------
+
         add_translate_context_menu(
             self
         )
@@ -346,7 +680,7 @@ class TranslationBot(commands.Bot):
             "Registered context menu command (Translate)"
         )
 
-        # Print all registered app commands for debugging
+        # Debug output.
         print(
             "App commands after setup_hook:",
             [
@@ -356,24 +690,32 @@ class TranslationBot(commands.Bot):
         )
 
 
+# ---------------------------------------------------------
+# Create bot
+# ---------------------------------------------------------
+
 bot = TranslationBot()
 
-# Register commands
+
+# Register admin commands
 admin_commands.setup(
     bot
 )
 
 
-# --- Bot Events ---
+# ---------------------------------------------------------
+# Ready event
+# ---------------------------------------------------------
+
 @bot.event
 async def on_ready():
+
     await db.init_db()
 
     print(
         f'{bot.user} has connected to Discord!'
     )
 
-    # Print all registered app commands after bot is ready
     print(
         "App commands after on_ready:",
         [
@@ -382,9 +724,58 @@ async def on_ready():
         ]
     )
 
-# Sync commands to the current Discord server
+    if TRANSLATION_CHANNEL_ID:
+        print(
+            "Automatic translation channel ID: "
+            f"{TRANSLATION_CHANNEL_ID}"
+        )
+    else:
+        print(
+            "Automatic translation is currently enabled "
+            "for all server channels."
+        )
+
+
+# ---------------------------------------------------------
+# Message event
+# ---------------------------------------------------------
+
+@bot.event
+async def on_message(
+    message: discord.Message
+):
+
+    # Keep prefix commands such as !sync working.
+    if not message.author.bot:
+        await bot.process_commands(
+            message
+        )
+
+    # Ignore bots and DMs after processing commands.
+    if message.author.bot:
+        return
+
+    if message.guild is None:
+        return
+
+    # Run automatic translation.
+    try:
+        await automatic_translate_message(
+            message
+        )
+    except Exception as e:
+        print(
+            f"Automatic translation handler error: {e}"
+        )
+
+
+# ---------------------------------------------------------
+# Server-specific command synchronization
+# ---------------------------------------------------------
+
 @bot.command()
 async def sync(ctx):
+
     if ctx.guild is None:
         await ctx.send(
             "This command must be used in a server."
@@ -402,10 +793,15 @@ async def sync(ctx):
     await ctx.send(
         "Synced commands to this server."
     )
-def run_bot():
-    """Entry point for the bot when used as a package."""
 
-    # Start the health check server in a separate thread
+
+# ---------------------------------------------------------
+# Bot entry point
+# ---------------------------------------------------------
+
+def run_bot():
+    """Entry point for the bot."""
+
     health_thread = threading.Thread(
         target=run_health_server,
         daemon=True
@@ -413,12 +809,14 @@ def run_bot():
 
     health_thread.start()
 
-    # Run the bot
     bot.run(
         os.getenv('DISCORD_TOKEN')
     )
 
 
-# Run the bot if this file is executed directly
+# ---------------------------------------------------------
+# Run directly
+# ---------------------------------------------------------
+
 if __name__ == '__main__':
     run_bot()

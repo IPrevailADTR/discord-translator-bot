@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "discord-trad-bot"
+version = "2.0.1"
+description = "A Discord bot that automatically translates messages in specified channels"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [
+    { name = "Pierre Tsia", email = "pierre.tsiakkaros@gmail.com" }
+]
+dependencies = [
+    "discord.py==2.3.2",
+    "python-dotenv==1.0.0",
+    "googletrans==4.0.0-rc1",
+    "SQLAlchemy==2.0.23",
+    "aiosqlite==0.19.0"
+]
+
+[project.scripts]
+discord-trad-bot = "src.main:run_bot"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/discord_trad_bot"] 

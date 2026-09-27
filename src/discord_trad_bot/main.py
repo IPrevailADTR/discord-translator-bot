@@ -4,9 +4,13 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from discord_trad_bot import db
 from discord import app_commands
-from discord_trad_bot.utils import preserve_user_mentions, restore_mentions, translate_message, detect_language
+from discord_trad_bot.utils import (
+    preserve_user_mentions,
+    restore_mentions,
+    translate_message,
+    detect_language,
+)
 from discord_trad_bot.constants import SUPPORTED_LANGUAGES
-# Import command modules
 from discord_trad_bot.commands import admin_commands
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -28,11 +32,15 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
+
             response = {
                 'status': 'healthy',
                 'bot_status': 'online' if bot.is_ready() else 'offline'
             }
-            self.wfile.write(json.dumps(response).encode())
+
+            self.wfile.write(
+                json.dumps(response).encode()
+            )
         else:
             self.send_response(404)
             self.end_headers()
@@ -43,7 +51,12 @@ def run_health_server():
         ('0.0.0.0', int(os.getenv('PORT', '8080'))),
         HealthCheckHandler
     )
-    print(f"Health check server running on port {os.getenv('PORT', '8080')}")
+
+    print(
+        f"Health check server running on port "
+        f"{os.getenv('PORT', '8080')}"
+    )
+
     server.serve_forever()
 
 
@@ -54,7 +67,9 @@ def add_translate_context_menu(bot):
         interaction: discord.Interaction,
         message: discord.Message
     ):
-        user_lang = await db.get_user_lang(interaction.user.id)
+        user_lang = await db.get_user_lang(
+            interaction.user.id
+        )
 
         if not user_lang:
             await interaction.response.send_message(
@@ -66,7 +81,9 @@ def add_translate_context_menu(bot):
             )
             return
 
-        detected_lang = detect_language(message.content)
+        detected_lang = detect_language(
+            message.content
+        )
 
         if not detected_lang:
             await interaction.response.send_message(
@@ -77,17 +94,24 @@ def add_translate_context_menu(bot):
 
         if detected_lang == user_lang:
             await interaction.response.send_message(
-                f"This message is already in your preferred language ({user_lang}).",
+                f"This message is already in your preferred language "
+                f"({user_lang}).",
                 ephemeral=True
             )
             return
 
         try:
-            content_preserved, mention_map = preserve_user_mentions(message.content)
+            content_preserved, mention_map = (
+                preserve_user_mentions(
+                    message.content
+                )
+            )
+
             translated_text = translate_message(
                 content_preserved,
                 user_lang
             )
+
             translated_text = restore_mentions(
                 translated_text,
                 mention_map
@@ -99,12 +123,20 @@ def add_translate_context_menu(bot):
             )
 
             embed.set_author(
-                name=f"Translation for {interaction.user.display_name}",
-                icon_url=interaction.user.display_avatar.url
+                name=(
+                    f"Translation for "
+                    f"{interaction.user.display_name}"
+                ),
+                icon_url=(
+                    interaction.user.display_avatar.url
+                )
             )
 
             embed.set_footer(
-                text=f"Original message by {message.author.display_name}"
+                text=(
+                    f"Original message by "
+                    f"{message.author.display_name}"
+                )
             )
 
             await interaction.response.send_message(
@@ -123,7 +155,9 @@ def add_translate_context_menu(bot):
                 ephemeral=True
             )
 
-    bot.tree.add_command(translate_message_context)
+    bot.tree.add_command(
+        translate_message_context
+    )
 
 
 class TranslationBot(commands.Bot):
@@ -165,7 +199,9 @@ class TranslationBot(commands.Bot):
                 ephemeral=True
             )
 
-        print("Registered /setlang command")
+        print(
+            "Registered /setlang command"
+        )
 
         @self.tree.command(
             name="ping",
@@ -179,7 +215,9 @@ class TranslationBot(commands.Bot):
                 ephemeral=True
             )
 
-        print("Registered /ping command")
+        print(
+            "Registered /ping command"
+        )
 
         @self.tree.command(
             name="languages",
@@ -188,16 +226,27 @@ class TranslationBot(commands.Bot):
         async def languages_slash(
             interaction: discord.Interaction
         ):
-            codes = sorted(SUPPORTED_LANGUAGES)
+            codes = sorted(
+                SUPPORTED_LANGUAGES
+            )
+
             chunk_size = 50
 
-            for i in range(0, len(codes), chunk_size):
+            for i in range(
+                0,
+                len(codes),
+                chunk_size
+            ):
                 await interaction.response.send_message(
-                    ' '.join(codes[i:i + chunk_size]),
+                    ' '.join(
+                        codes[i:i + chunk_size]
+                    ),
                     ephemeral=True
                 )
 
-        print("Registered /languages command")
+        print(
+            "Registered /languages command"
+        )
 
         @self.tree.command(
             name="mylang",
@@ -222,7 +271,9 @@ class TranslationBot(commands.Bot):
                     ephemeral=True
                 )
 
-        print("Registered /mylang command")
+        print(
+            "Registered /mylang command"
+        )
 
         @self.tree.command(
             name="help-translate",
@@ -267,7 +318,9 @@ class TranslationBot(commands.Bot):
                 ephemeral=True
             )
 
-        print("Registered /help-translate command")
+        print(
+            "Registered /help-translate command"
+        )
 
         @setlang.autocomplete('language')
         async def language_autocomplete(
@@ -279,11 +332,15 @@ class TranslationBot(commands.Bot):
                     name=lang,
                     value=lang
                 )
-                for lang in sorted(SUPPORTED_LANGUAGES)
+                for lang in sorted(
+                    SUPPORTED_LANGUAGES
+                )
                 if current.lower() in lang.lower()
             ][:25]
 
-        add_translate_context_menu(self)
+        add_translate_context_menu(
+            self
+        )
 
         print(
             "Registered context menu command (Translate)"
@@ -292,26 +349,37 @@ class TranslationBot(commands.Bot):
         # Print all registered app commands for debugging
         print(
             "App commands after setup_hook:",
-            [cmd.name for cmd in self.tree.get_commands()]
+            [
+                cmd.name
+                for cmd in self.tree.get_commands()
+            ]
         )
 
 
 bot = TranslationBot()
 
 # Register commands
-admin_commands.setup(bot)
+admin_commands.setup(
+    bot
+)
 
 
 # --- Bot Events ---
 @bot.event
 async def on_ready():
     await db.init_db()
-    print(f'{bot.user} has connected to Discord!')
+
+    print(
+        f'{bot.user} has connected to Discord!'
+    )
 
     # Print all registered app commands after bot is ready
     print(
         "App commands after on_ready:",
-        [cmd.name for cmd in bot.tree.get_commands()]
+        [
+            cmd.name
+            for cmd in bot.tree.get_commands()
+        ]
     )
 
 
@@ -324,8 +392,13 @@ async def sync(ctx):
         )
         return
 
-    bot.tree.copy_global_to(guild=ctx.guild)
-    await bot.tree.sync(guild=ctx.guild)
+    bot.tree.copy_global_to(
+        guild=ctx.guild
+    )
+
+    await bot.tree.sync(
+        guild=ctx.guild
+    )
 
     await ctx.send(
         "Synced commands to this server."
@@ -340,6 +413,7 @@ def run_bot():
         target=run_health_server,
         daemon=True
     )
+
     health_thread.start()
 
     # Run the bot

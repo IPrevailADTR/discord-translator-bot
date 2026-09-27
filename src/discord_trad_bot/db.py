@@ -1,5 +1,6 @@
-import aiosqlite
 import os
+
+import aiosqlite
 
 
 DB_PATH = os.path.join(
@@ -10,7 +11,11 @@ DB_PATH = os.path.join(
 
 
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
+
+    async with aiosqlite.connect(
+        DB_PATH
+    ) as db:
+
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS user_lang (
@@ -27,7 +32,11 @@ async def set_user_lang(
     user_id: int,
     lang: str
 ):
-    async with aiosqlite.connect(DB_PATH) as db:
+
+    async with aiosqlite.connect(
+        DB_PATH
+    ) as db:
+
         await db.execute(
             """
             INSERT INTO user_lang (
@@ -52,7 +61,11 @@ async def set_user_lang(
 async def get_user_lang(
     user_id: int
 ):
-    async with aiosqlite.connect(DB_PATH) as db:
+
+    async with aiosqlite.connect(
+        DB_PATH
+    ) as db:
+
         async with db.execute(
             """
             SELECT lang
@@ -66,14 +79,19 @@ async def get_user_lang(
 
             row = await cursor.fetchone()
 
-            if row:
-                return row[0]
-
-            return None
+            return (
+                row[0]
+                if row
+                else None
+            )
 
 
 async def get_all_user_langs():
-    async with aiosqlite.connect(DB_PATH) as db:
+
+    async with aiosqlite.connect(
+        DB_PATH
+    ) as db:
+
         async with db.execute(
             """
             SELECT user_id, lang
@@ -92,7 +110,11 @@ async def get_all_user_langs():
 async def clear_user_lang(
     user_id: int
 ):
-    async with aiosqlite.connect(DB_PATH) as db:
+
+    async with aiosqlite.connect(
+        DB_PATH
+    ) as db:
+
         await db.execute(
             """
             DELETE FROM user_lang
